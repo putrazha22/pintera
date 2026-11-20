@@ -1,0 +1,82 @@
+name: Build APK PR Pintra
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ambil kode
+        uses: actions/checkout@v4
+
+      # Mendukung 2 cara upload:
+      # 1) file proyek di-upload langsung (ada gradlew di folder utama), atau
+      # 2) cukup upload file .zip proyek ke repo (otomatis diekstrak di sini).
+      - name: Siapkan folder proyek
+        id: prep
+        run: |
+          DIR=""
+          if [ -f gradlew ]; then
+            DIR="."
+          else
+            ZIP=$(find . -maxdepth 2 -iname '*.zip' -not -path './.git/*' | head -n 1)
+            if [ -n "$ZIP" ]; then
+              echo "Mengekstrak $ZIP"
+              mkdir -p _src
+              unzip -q -o "$ZIP" -d _src
+              G=$(find _src -name gradlew | head -n 1)
+              if [ -n "$G" ]; then DIR=$(dirname "$G"); fi
+            fi
+          fi
+          if [ -z "$DIR" ]; then
+            echo "Proyek belum ada di repo (belum ada gradlew atau file .zip). Upload dulu lalu build akan jalan otomatis."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Folder proyek: $DIR"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pasang Java 17
+        if: steps.prep.outputs.found == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build APK
+        if: steps.prep.outputs.found == 'true'
+        working-directory: ${{ steps.prep.outputs.dir }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Siapkan file APK
+        if: steps.prep.outputs.found == 'true'
+        run: |
+          APK=$(find "${{ steps.prep.outputs.dir }}/app/build/outputs/apk/debug" -name '*.apk' | head -n 1)
+          cp "$APK" "$GITHUB_WORKSPACE/PR-Pintra.apk"
+          ls -la "$GITHUB_WORKSPACE/PR-Pintra.apk"
+
+      - name: Simpan APK sebagai artifact
+        if: steps.prep.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PR-Pintra-APK
+          path: PR-Pintra.apk
+
+      # APK juga dipublikasikan di menu "Releases" supaya gampang diunduh dari HP.
+      - name: Publikasikan di Releases
+        if: steps.prep.outputs.found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: PR Pintra build #${{ github.run_number }}
+          body: "APK PR Pintra. Unduh file PR-Pintra.apk lalu install di HP Android."
+          files: PR-Pintra.apk
